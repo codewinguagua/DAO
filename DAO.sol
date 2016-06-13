@@ -40,6 +40,8 @@ contract DAOInterface {
     // Period after which a proposal is closed
     // (used in the case `executeProposal` fails because it throws)
     uint constant executeProposalPeriod = 10 days;
+    // Time for vote freeze. A proposal needs to have majority support before votingDeadline - preSupportTime
+    uint constant preSupportTime = 2 days;
     // Denotes the maximum proposal deposit that can be given. It is given as
     // a fraction of total Ether spent plus balance of the DAO
     uint constant maxDepositDivisor = 100;
@@ -121,6 +123,9 @@ contract DAOInterface {
         bool newCurator;
         // Data needed for splitting the DAO
         SplitData[] splitData;
+        // true if more tokens are in favour of the proposal than opposed to it at
+        // least `preSupportTime` before the voting deadline
+        bool preSupport;
         // Number of Tokens in favor of the proposal
         uint yea;
         // Number of Tokens opposed to the proposal
@@ -514,6 +519,17 @@ contract DAO is DAOInterface, Token, TokenCreation {
         Voted(_proposalID, _supportsProposal, msg.sender);
     }
 
+    function verifyPreSupport(uint _proposalID) {
+        Proposal p = proposals[_proposalID];
+        if (now < p.votingDeadline - preSupportTime) {
+            if (p.yea > p.nay) {
+                p.preSupport = true;
+            }
+            else
+                p.preSupport = false;
+        }
+    }
+
 
     function executeProposal(
         uint _proposalID,
@@ -552,7 +568,7 @@ contract DAO is DAOInterface, Token, TokenCreation {
 
         bool proposalCheck = true;
 
-        if (p.amount > actualBalance())
+        if (p.amount > actualBalance() || p.preSupport == false)
             proposalCheck = false;
 
         uint quorum = p.yea + p.nay;

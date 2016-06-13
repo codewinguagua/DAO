@@ -82,6 +82,9 @@ contract DAOInterface {
     // tokens). The address points to the proposal ID.
     mapping (address => uint) public blocked;
 
+    // Map of addresses and proposal voted on by this address
+    mapping (address => uint[]) public votingRegister;
+
     // The minimum deposit (in wei) required to submit any proposal that is not
     // requesting a new Curator (no deposit is required for splits)
     uint public proposalDeposit;
@@ -485,15 +488,12 @@ contract DAO is DAOInterface, Token, TokenCreation {
     }
 
 
+
     function vote(uint _proposalID, bool _supportsProposal) onlyTokenholders noEther {
 
         Proposal p = proposals[_proposalID];
-        if (p.votedYes[msg.sender]
-            || p.votedNo[msg.sender]
-            || now >= p.votingDeadline) {
 
-            throw;
-        }
+        unVote(_proposalID);
 
         if (_supportsProposal) {
             p.yea += balances[msg.sender];
@@ -511,7 +511,44 @@ contract DAO is DAOInterface, Token, TokenCreation {
             blocked[msg.sender] = _proposalID;
         }
 
+        votingRegister[msg.sender].push(_proposalID);
         Voted(_proposalID, _supportsProposal, msg.sender);
+    }
+
+    function unVote(uint _proposalID){
+        Proposal p = proposals[_proposalID];
+
+        if (now >= p.votingDeadline) {
+            throw;
+        }
+
+        // (ambush prevention - another PR)
+        //if ((p.votedYes[msg.sender]
+        //    || p.votedNo[msg.sender])
+        //    && now > p.votingDeadline - preSupportTime) {
+        //    throw;
+        //}
+
+        if (p.votedYes[msg.sender]) {
+            p.yea -= balances[msg.sender];
+            p.votedYes[msg.sender] = false;
+        }
+
+        if (p.votedNo[msg.sender]) {
+            p.nay -= balances[msg.sender];
+            p.votedNo[msg.sender] = false;
+        }
+    }
+
+    function unVoteAll() {
+        for (uint i = 0; i < votingRegister[msg.sender].length; i++) {
+            Proposal p = proposals[votingRegister[msg.sender][i]];
+            if (now < p.votingDeadline)
+                unVote(i);
+        }
+
+        votingRegister[msg.sender].length = 0;
+        blocked[msg.sender] = 0;
     }
 
 
@@ -615,6 +652,46 @@ contract DAO is DAOInterface, Token, TokenCreation {
         p.open = false;
     }
 
+    function withdraw(
+        address _newCurator
+    ) noEther onlyTokenholders returns (bool _success) {
+
+        unVoteAll();
+
+        // Move ether
+        uint fundsToBeMoved =
+            (balances[msg.sender] * actualBalance()) /
+            totalSupply;
+
+        msg.sender.call.value(fundsToBeMoved);
+
+        // Assign reward rights
+        uint rewardTokenToBeMoved =
+            (balances[msg.sender] * rewardToken[address(this)]) /
+            totalSupply;
+
+        uint paidOutToBeMoved = DAOpaidOut[address(this)] * rewardTokenToBeMoved /
+            rewardToken[address(this)];
+
+        rewardToken[msg.sender] += rewardTokenToBeMoved;
+        if (rewardToken[address(this)] < rewardTokenToBeMoved)
+            throw;
+        rewardToken[address(this)] -= rewardTokenToBeMoved;
+
+        DAOpaidOut[msg.sender] += paidOutToBeMoved;
+        if (DAOpaidOut[address(this)] < paidOutToBeMoved)
+            throw;
+        DAOpaidOut[address(this)] -= paidOutToBeMoved;
+
+        // Burn DAO Tokens
+        Transfer(msg.sender, 0, balances[msg.sender]);
+        withdrawRewardFor(msg.sender); // be nice, and get his rewards
+        totalSupply -= balances[msg.sender];
+        balances[msg.sender] = 0;
+        paidOut[msg.sender] = 0;
+        return true;
+    }
+
     function splitDAO(
         uint _proposalID,
         address _newCurator
@@ -632,12 +709,12 @@ contract DAO is DAOInterface, Token, TokenCreation {
             // Is it a new curator proposal?
             || !p.newCurator
             // Have you voted for this split?
-            || !p.votedYes[msg.sender]
-            // Did you already vote on another proposal?
-            || (blocked[msg.sender] != _proposalID && blocked[msg.sender] != 0) )  {
+            || !p.votedYes[msg.sender])  {
 
             throw;
         }
+
+        unVoteAll();
 
         // If the new DAO doesn't exist yet, create the new DAO and store the
         // current split data
@@ -753,9 +830,9 @@ contract DAO is DAOInterface, Token, TokenCreation {
 
 
     function transfer(address _to, uint256 _value) returns (bool success) {
+        unVoteAll();
         if (isFueled
             && now > closingTime
-            && !isBlocked(msg.sender)
             && !isBlocked(_to)
             && _to != address(this)
             && transferPaidOut(msg.sender, _to, _value)

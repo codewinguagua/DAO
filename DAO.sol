@@ -663,7 +663,7 @@ contract DAO is DAOInterface, Token, TokenCreation {
             (balances[msg.sender] * actualBalance()) /
             totalSupply;
 
-        if (msg.sender.call.value(fundsToBeMoved)) {
+        if (msg.sender.send(fundsToBeMoved)) {
 
             // Assign reward rights
             uint rewardTokenToBeMoved =
